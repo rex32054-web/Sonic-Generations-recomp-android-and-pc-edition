@@ -32,7 +32,11 @@ android {
         buildConfigField("String", "TITLE_ID", "\"$rexTitleId\"")
         buildConfigField("String", "PROJECT", "\"$rexName\"")
 
-        ndk { abiFilters += "arm64-v8a" }
+        // Android ARM64 only.
+        // NEON/SIMD is part of the ARMv8-A baseline used by arm64-v8a.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
 
         externalNativeBuild {
             cmake {
@@ -44,12 +48,17 @@ android {
                     "-DREX_PORT_DIR=$rexPortDir",
                     "-DREX_APP_NAME=$rexName",
                 )
-                cppFlags += listOf("-std=c++23")
+
+                cppFlags += listOf(
+                    "-std=c++23"
+                )
             }
         }
     }
 
-    buildFeatures { buildConfig = true }
+    buildFeatures {
+        buildConfig = true
+    }
 
     externalNativeBuild {
         cmake {
@@ -60,17 +69,14 @@ android {
 
     sourceSets {
         getByName("main") {
-            // title DB + per-title cover are staged by the workflow into app/src/main/assets
             assets.srcDirs("src/main/assets")
         }
     }
 
     signingConfigs {
-        // Deterministic debug-style key so every CI APK of the same title can
-        // be installed over the previous one (a fresh random debug key per
-        // runner would force an uninstall each time).
         create("ci") {
             val ks = file("${rootProject.projectDir}/ci-release.jks")
+
             if (ks.exists()) {
                 storeFile = ks
                 storePassword = "rexauto"
@@ -82,17 +88,53 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // R8 optimizes Java/Kotlin bytecode and removes unused code.
+            isMinifyEnabled = true
+
+            // Removes Android resources that are not referenced.
+            isShrinkResources = true
+
+            // Keep R8's optimized Android configuration.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+
+            // Native C++ optimization.
+            externalNativeBuild {
+                cmake {
+                    cppFlags += listOf(
+                        "-O3",
+                        "-DNDEBUG"
+                    )
+                }
+            }
+
             if (file("${rootProject.projectDir}/ci-release.jks").exists()) {
                 signingConfig = signingConfigs.getByName("ci")
             }
         }
-        debug { isJniDebuggable = true }
+
+        debug {
+            // Keep debugging/profiling usable.
+            isMinifyEnabled = false
+            isShrinkResources = false
+            isJniDebuggable = true
+
+            externalNativeBuild {
+                cmake {
+                    cppFlags += listOf(
+                        "-O0"
+                    )
+                }
+            }
+        }
     }
 
     packaging {
-        jniLibs { useLegacyPackaging = true }
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     compileOptions {
