@@ -24,17 +24,13 @@ jobs:
     steps:
 
       # =========================================================
-      # 1. Checkout del proyecto
-      # =========================================================
-      # No inicializamos submódulos porque el .gitmodules original
-      # puede estar corrupto.
+      # 1. Checkout SIN submódulos del proyecto principal
       # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: false
-
 
       # =========================================================
       # 2. Java 17
@@ -46,9 +42,8 @@ jobs:
           distribution: temurin
           cache: gradle
 
-
       # =========================================================
-      # 3. Instalar herramientas necesarias
+      # 3. Dependencias Linux
       # =========================================================
       - name: Install build dependencies
         shell: bash
@@ -62,15 +57,14 @@ jobs:
             curl \
             unzip \
             zip \
+            pkg-config \
+            libx11-xcb-dev \
+            libusb-1.0-0-dev \
             ninja-build \
             cmake
 
-
       # =========================================================
-      # 4. Instalar Android SDK / NDK / CMake
-      # =========================================================
-      # El runner normalmente ya dispone del SDK, pero instalamos
-      # explícitamente las versiones que utiliza el proyecto.
+      # 4. Configurar Android SDK
       # =========================================================
       - name: Configure Android SDK
         shell: bash
@@ -80,12 +74,11 @@ jobs:
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
 
           if [ -z "$SDK_ROOT" ]; then
-            echo "::error::Android SDK no encontrado en el runner."
+            echo "::error::Android SDK no encontrado."
             exit 1
           fi
 
-          echo "Android SDK:"
-          echo "$SDK_ROOT"
+          echo "Android SDK: $SDK_ROOT"
 
           SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
@@ -105,18 +98,8 @@ jobs:
 
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
-
       # =========================================================
       # 5. Descargar ReXGlue SDK v0.10.0
-      # =========================================================
-      # El proyecto original utiliza:
-      #
-      # sdk/rexglue-sdk
-      #
-      # y posteriormente pasa esa ruta a Gradle mediante:
-      #
-      # -PrexSdkDir=$PWD/sdk/rexglue-sdk
-      #
       # =========================================================
       - name: Download ReXGlue SDK v0.10.0
         shell: bash
@@ -124,7 +107,6 @@ jobs:
           set -euxo pipefail
 
           mkdir -p sdk
-
           rm -rf sdk/rexglue-sdk
 
           git clone \
@@ -135,19 +117,11 @@ jobs:
 
           cd sdk/rexglue-sdk
 
-          echo "ReXGlue SDK descargado."
-
+          echo "ReXGlue SDK descargado:"
           git rev-parse HEAD
 
-          echo "SDK version:"
-          grep -E 'project\(ReXGlue|VERSION' CMakeLists.txt | head -n 5 || true
-
-
       # =========================================================
-      # 6. Inicializar las dependencias del SDK
-      # =========================================================
-      # Esto se hace DESPUÉS de haber descargado directamente el
-      # SDK, evitando depender del .gitmodules del proyecto del juego.
+      # 6. Inicializar dependencias del SDK
       # =========================================================
       - name: Initialize ReXGlue SDK dependencies
         shell: bash
@@ -159,17 +133,8 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
-          echo "Dependencias del SDK inicializadas."
-
-
       # =========================================================
-      # 7. Aplicar parche gráfico de Android
-      # =========================================================
-      # El repositorio original contiene:
-      #
-      # android/patches/rexglue-sdk-v0.10.0.patch
-      #
-      # Este parche se aplica directamente sobre el SDK descargado.
+      # 7. Aplicar parche gráfico
       # =========================================================
       - name: Apply ReXGlue Android graphics patch
         shell: bash
@@ -195,24 +160,20 @@ jobs:
 
           echo "Comprobando parche..."
 
-          git apply \
-            --check \
-            "$PATCH"
+          git apply --check "$PATCH"
 
           echo "Aplicando parche..."
 
-          git apply \
-            "$PATCH"
+          git apply "$PATCH"
 
           echo "Parche aplicado correctamente."
 
           git diff --stat
 
-
       # =========================================================
-      # 8. Localizar Gradle Wrapper
+      # 8. Preparar Gradle
       # =========================================================
-      - name: Locate Gradle wrapper
+      - name: Prepare Gradle
         shell: bash
         run: |
           set -euxo pipefail
@@ -226,14 +187,8 @@ jobs:
 
           chmod +x "$GRADLEW"
 
-          echo "Gradle wrapper:"
-          echo "$GRADLEW"
-
-          echo "GRADLEW_PATH=$GRADLEW" >> "$GITHUB_ENV"
-
-
       # =========================================================
-      # 9. Limpiar builds anteriores
+      # 9. Limpiar compilaciones anteriores
       # =========================================================
       - name: Clean Gradle and native build
         shell: bash
@@ -246,18 +201,8 @@ jobs:
             --no-daemon \
             --stacktrace
 
-
       # =========================================================
-      # 10. Compilación Release
-      # =========================================================
-      # IMPORTANTE:
-      # Se pasan explícitamente:
-      #
-      #   exName=sonicgenerations
-      #   exPortDir=../port
-      #   exSdkDir=../sdk/rexglue-sdk
-      #
-      # igual que el flujo documentado por el proyecto original.
+      # 10. Compilar APK Release
       # =========================================================
       - name: Build Release APK
         shell: bash
@@ -272,8 +217,8 @@ jobs:
             -PrexSdkDir="$GITHUB_WORKSPACE/sdk/rexglue-sdk" \
             --no-daemon \
             --stacktrace \
+            --info \
             --warning-mode all
-
 
       # =========================================================
       # 11. Localizar APK
@@ -283,7 +228,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          APK=$(find "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release" \
+          APK=$(find \
+            "$GITHUB_WORKSPACE/android/app/build/outputs/apk/release" \
             -type f \
             -name "*.apk" \
             | head -n 1 || true)
@@ -298,7 +244,6 @@ jobs:
 
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
-
       # =========================================================
       # 12. Subir APK
       # =========================================================
@@ -309,4 +254,3 @@ jobs:
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
           retention-days: 7
-   
